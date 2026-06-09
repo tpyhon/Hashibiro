@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
+import { supabase } from "@/lib/supabase";
 
 type Tab = "plan" | "favorite" | "history";
 type Status = "suggested" | "favorite" | "visited";
@@ -16,6 +17,7 @@ interface Place {
   payment_methods: string;
   tabelog_url: string;
   comment: string;
+  created_at: string;
 }
 
 const MOODS = [
@@ -42,14 +44,31 @@ function categoryColor(cat: string) {
   return categoryColors[cat] ?? "bg-gray-100 text-gray-600";
 }
 
+function Toast({ message, onClose }: { message: string; onClose: () => void }) {
+  useEffect(() => {
+    const t = setTimeout(onClose, 4500);
+    return () => clearTimeout(t);
+  }, [onClose]);
+
+  return (
+    <div className="fixed bottom-6 inset-x-4 z-50 flex justify-center pointer-events-none">
+      <div className="bg-rose-500 text-white text-sm px-5 py-3 rounded-2xl shadow-xl max-w-sm text-center leading-6">
+        {message}
+      </div>
+    </div>
+  );
+}
+
 function PlaceCard({
   place,
   onFavorite,
   onVisited,
+  onVisit,
 }: {
   place: Place;
   onFavorite: (id: number) => void;
   onVisited: (id: number) => void;
+  onVisit: (url: string) => void;
 }) {
   const isFav = place.status === "favorite";
   const isVisited = place.status === "visited";
@@ -65,8 +84,8 @@ function PlaceCard({
         </div>
         <button
           onClick={() => onFavorite(place.id)}
-          className={`text-xl transition-transform hover:scale-110 ${isFav ? "text-rose-500" : "text-gray-300"}`}
-          title="お気に入り"
+          className={`text-xl flex-shrink-0 transition-transform hover:scale-110 ${isFav ? "text-rose-500" : "text-gray-300"}`}
+          title={isFav ? "お気に入り解除" : "お気に入り"}
         >
           {isFav ? "❤️" : "🖤"}
         </button>
@@ -93,14 +112,12 @@ function PlaceCard({
       </div>
 
       <div className="flex gap-2 pt-1">
-        <a
-          href={place.tabelog_url}
-          target="_blank"
-          rel="noopener noreferrer"
+        <button
+          onClick={() => onVisit(place.tabelog_url)}
           className="flex-1 text-center text-xs font-medium bg-rose-500 text-white rounded-full py-2 hover:bg-rose-600 transition-colors"
         >
           ここにする！ 🗺️
-        </a>
+        </button>
         <button
           onClick={() => onVisited(place.id)}
           disabled={isVisited}
@@ -119,11 +136,11 @@ function PlaceCard({
 
 function LoadingCard() {
   return (
-    <div className="bg-white rounded-2xl shadow-sm border border-rose-50 p-6 flex flex-col items-center gap-3 animate-pulse">
-      <div className="text-4xl">🦤</div>
+    <div className="bg-white rounded-2xl shadow-sm border border-rose-50 p-6 flex flex-col items-center gap-3">
+      <div className="text-4xl animate-bounce">🦤</div>
       <p className="text-sm font-semibold text-rose-500">ハシビロコウが中間地点を探索中...</p>
       <p className="text-xs text-gray-400">Geminiが最高のデートスポットを選んでいます</p>
-      <div className="w-full flex flex-col gap-2 mt-2">
+      <div className="w-full flex flex-col gap-2 mt-2 animate-pulse">
         {[1, 2, 3].map((i) => (
           <div key={i} className="h-4 bg-rose-50 rounded-full" />
         ))}
@@ -137,14 +154,47 @@ export default function Home() {
   const [places, setPlaces] = useState<Place[]>([]);
   const [selectedMood, setSelectedMood] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [currentArea, setCurrentArea] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+
+  const loadPlaces = useCallback(async () => {
+    const { data } = await supabase
+      .from("places")
+      .select("*")
+      .order("created_at", { ascending: false });
+    setPlaces((data as Place[]) ?? []);
+  }, []);
+
+  useEffect(() => {
+    loadPlaces().finally(() => setIsInitialLoading(false));
+  }, [loadPlaces]);
+
+  const handleFavorite = async (id: number) => {
+    const place = places.find((p) => p.id === id);
+    if (!place) return;
+    const newStatus: Status = place.status === "favorite" ? "suggested" : "favorite";
+    // 楽観的更新
+    setPlaces((prev) => prev.map((p) => (p.id === id ? { ...p, status: newStatus } : p)));
+    await supabase.from("places").update({ status: newStatus }).eq("id", id);
+  };
+
+  const handleVisited = async (id: number) => {
+    // 楽観的更新
+    setPlaces((prev) => prev.map((p) => (p.id === id ? { ...p, status: "visited" } : p)));
+    await supabase.from("places").update({ status: "visited" }).eq("id", id);
+  };
+
+  const handleVisit = (url: string) => {
+    setToast("予約ページを開くよ！🗺️\nデート楽しんでね 💕\nポップアップブロックに注意してね！");
+    window.open(url, "_blank", "noopener,noreferrer");
+  };
 
   const handleMoodSelect = async (mood: string) => {
     const newMood = mood === selectedMood ? null : mood;
     setSelectedMood(newMood);
     setErrorMsg(null);
-
     if (!newMood) return;
 
     setIsLoading(true);
@@ -164,18 +214,7 @@ export default function Home() {
 
       const data = await res.json();
       setCurrentArea(data.area);
-
-      // API返却データをフロント用フォーマットに変換
-      const fetched: Place[] = (data.places as Place[]).map((p) => ({
-        ...p,
-        status: "suggested" as Status,
-      }));
-
-      // suggestedを新データに置き換え、favorite/visitedは維持
-      setPlaces((prev) => [
-        ...prev.filter((p) => p.status !== "suggested"),
-        ...fetched,
-      ]);
+      await loadPlaces();
       setActiveTab("plan");
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : "エラーが発生しました");
@@ -184,41 +223,26 @@ export default function Home() {
     }
   };
 
-  const handleFavorite = async (id: number) => {
-    setPlaces((prev) =>
-      prev.map((p) =>
-        p.id === id
-          ? { ...p, status: p.status === "favorite" ? "suggested" : "favorite" }
-          : p
-      )
-    );
-  };
-
-  const handleVisited = async (id: number) => {
-    setPlaces((prev) =>
-      prev.map((p) => (p.id === id ? { ...p, status: "visited" } : p))
-    );
-  };
-
-  const suggestedPlaces = places.filter((p) => p.status === "suggested");
+  // タブ別データ
+  const planPlaces = places.filter((p) => p.status === "suggested" || p.status === "favorite");
   const favoritePlaces = places.filter((p) => p.status === "favorite");
-  const visitedPlaces = places.filter((p) => p.status === "visited");
+  const visitedPlaces = places.filter((p) => p.status === "visited"); // DB側でcreated_at降順済み
 
   const tabs: { key: Tab; label: string; icon: string; count: number }[] = [
-    { key: "plan", label: "作戦会議", icon: "🗓️", count: suggestedPlaces.length },
+    { key: "plan", label: "作戦会議", icon: "🗓️", count: planPlaces.length },
     { key: "favorite", label: "お気に入り", icon: "❤️", count: favoritePlaces.length },
     { key: "history", label: "あしあと", icon: "👣", count: visitedPlaces.length },
   ];
 
   const displayedPlaces =
-    activeTab === "plan"
-      ? suggestedPlaces
-      : activeTab === "favorite"
-      ? favoritePlaces
-      : visitedPlaces;
+    activeTab === "plan" ? planPlaces
+    : activeTab === "favorite" ? favoritePlaces
+    : visitedPlaces;
 
   return (
     <div className="min-h-screen font-sans" style={{ backgroundColor: "#fff8f8" }}>
+      {toast && <Toast message={toast} onClose={() => setToast(null)} />}
+
       {/* ヘッダー */}
       <header className="bg-white border-b border-rose-100 sticky top-0 z-10 shadow-sm">
         <div className="max-w-md mx-auto px-4 py-3">
@@ -256,9 +280,7 @@ export default function Home() {
               {count > 0 && (
                 <span
                   className={`text-[10px] mt-0.5 px-1.5 rounded-full ${
-                    activeTab === key
-                      ? "bg-white/30 text-white"
-                      : "bg-rose-100 text-rose-500"
+                    activeTab === key ? "bg-white/30 text-white" : "bg-rose-100 text-rose-500"
                   }`}
                 >
                   {count}件
@@ -268,12 +290,10 @@ export default function Home() {
           ))}
         </div>
 
-        {/* 作戦会議タブ: 気分ボタン */}
+        {/* 作戦会議: 気分ボタン */}
         {activeTab === "plan" && (
           <div className="mb-5">
-            <p className="text-sm font-semibold text-gray-600 mb-2">
-              今日の気分は？
-            </p>
+            <p className="text-sm font-semibold text-gray-600 mb-2">今日の気分は？</p>
             <div className="flex flex-wrap gap-2">
               {MOODS.map((mood) => (
                 <button
@@ -290,30 +310,32 @@ export default function Home() {
                 </button>
               ))}
             </div>
-            {errorMsg && (
-              <p className="text-xs text-red-500 mt-2">⚠️ {errorMsg}</p>
-            )}
+            {errorMsg && <p className="text-xs text-red-500 mt-2">⚠️ {errorMsg}</p>}
           </div>
         )}
 
-        {/* あしあとタブ: ヘッダー */}
+        {/* あしあと: ヘッダー */}
         {activeTab === "history" && visitedPlaces.length > 0 && (
           <div className="mb-4 bg-white rounded-2xl p-4 border border-rose-50 shadow-sm text-center">
             <p className="text-2xl">👣</p>
-            <p className="text-sm font-semibold text-gray-700 mt-1">
-              二人の思い出スポット
-            </p>
-            <p className="text-xs text-gray-400">
-              {visitedPlaces.length}箇所を一緒に訪れました
-            </p>
+            <p className="text-sm font-semibold text-gray-700 mt-1">二人の思い出スポット</p>
+            <p className="text-xs text-gray-400">{visitedPlaces.length}箇所を一緒に訪れました</p>
           </div>
         )}
 
-        {/* ローディング */}
-        {isLoading && activeTab === "plan" && <LoadingCard />}
+        {/* 初期ローディング */}
+        {isInitialLoading && (
+          <div className="text-center py-16 text-gray-400">
+            <p className="text-3xl animate-spin">🦤</p>
+            <p className="text-sm mt-2">データを読み込み中...</p>
+          </div>
+        )}
+
+        {/* Gemini生成中ローディング */}
+        {!isInitialLoading && isLoading && activeTab === "plan" && <LoadingCard />}
 
         {/* カード一覧 */}
-        {!isLoading && displayedPlaces.length > 0 && (
+        {!isInitialLoading && !isLoading && displayedPlaces.length > 0 && (
           <div className="flex flex-col gap-3">
             {displayedPlaces.map((place) => (
               <PlaceCard
@@ -321,23 +343,20 @@ export default function Home() {
                 place={place}
                 onFavorite={handleFavorite}
                 onVisited={handleVisited}
+                onVisit={handleVisit}
               />
             ))}
           </div>
         )}
 
         {/* 空状態 */}
-        {!isLoading && displayedPlaces.length === 0 && (
+        {!isInitialLoading && !isLoading && displayedPlaces.length === 0 && (
           <div className="text-center py-16 text-gray-400">
             {activeTab === "plan" ? (
               <>
                 <p className="text-4xl mb-3">🦤</p>
-                <p className="text-sm font-medium text-gray-500">
-                  上の「気分ボタン」を押して
-                </p>
-                <p className="text-sm text-gray-400">
-                  ハシビロコウにデートプランを聞いてみよう！
-                </p>
+                <p className="text-sm font-medium text-gray-500">上の「気分ボタン」を押して</p>
+                <p className="text-sm text-gray-400">ハシビロコウにデートプランを聞いてみよう！</p>
               </>
             ) : (
               <>
