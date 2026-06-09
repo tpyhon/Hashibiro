@@ -172,7 +172,7 @@ export async function POST(req: NextRequest) {
 
     const records = generated.places.map((p) => ({
       name: p.name,
-      type: p.type,
+      type: p.type === "date_spot" ? "date_spot" : "restaurant",
       category: p.category,
       budget: p.budget,
       business_hours: p.business_hours,
