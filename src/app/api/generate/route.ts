@@ -22,15 +22,21 @@ const placeSchema = {
           budget: { type: Type.STRING },
           business_hours: { type: Type.STRING },
           payment_methods: { type: Type.STRING },
-          tabelog_url: { type: Type.STRING },
           comment: { type: Type.STRING },
         },
-        required: ["name", "type", "category", "budget", "business_hours", "payment_methods", "tabelog_url", "comment"],
+        required: ["name", "type", "category", "budget", "business_hours", "payment_methods", "comment"],
       },
     },
   },
   required: ["area", "places"],
 };
+
+function buildUrl(name: string, type: string): string {
+  if (type === "restaurant") {
+    return `https://tabelog.com/rstLst/?sk=${encodeURIComponent(name)}`;
+  }
+  return `https://www.google.com/maps/search/${encodeURIComponent(name)}`;
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -67,7 +73,6 @@ export async function POST(req: NextRequest) {
 2. そのエリアにある**チェーン店以外**の評価が高い飲食店を4〜5店舗、気分に合わせて異なるカテゴリ（イタリアン、和食、中華など）で提案する
 3. 同エリアにある飲食店以外のデートスポット（公園、美術館、商業施設など）を1〜2箇所提案する（type: "date_spot"）
 4. 各スポットの情報を正確に記入する
-   - tabelog_url: 食べログ検索URL "https://tabelog.com/rst/rst_search?sk=店名" またはスポットの公式URL
    - comment: 二人に向けた一言おすすめポイント（日本語、テンション高め）
    - business_hours: 営業時間（わからない場合は「要確認」）
    - payment_methods: 支払い方法（わからない場合は「要確認」）
@@ -97,7 +102,6 @@ JSONフォーマットで返答してください。
         budget: string;
         business_hours: string;
         payment_methods: string;
-        tabelog_url: string;
         comment: string;
       }>;
     };
@@ -111,6 +115,7 @@ JSONフォーマットで返答してください。
 
     const records = generated.places.map((p) => ({
       ...p,
+      tabelog_url: buildUrl(p.name, p.type),
       status: "suggested",
     }));
 
