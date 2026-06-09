@@ -22,10 +22,12 @@ const areaSchema = {
 
 export async function POST(req: NextRequest) {
   try {
-    const { stationA, stationB } = await req.json();
+    const { stationA, stationB, roomId } = await req.json();
     if (!stationA || !stationB) {
       return NextResponse.json({ error: "stations required" }, { status: 400 });
     }
+    // roomId は将来の拡張用（現状は stationA/B を直接受け取る）
+    void roomId;
 
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
 

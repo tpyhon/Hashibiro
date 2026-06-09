@@ -168,9 +168,9 @@ const TIME_PERIOD_LABELS: Record<string, string> = {
 
 export async function POST(req: NextRequest) {
   try {
-    const { mood, date, timePeriod, budget, area } = await req.json();
-    if (!mood) {
-      return NextResponse.json({ error: "mood is required" }, { status: 400 });
+    const { mood, date, timePeriod, budget, area, roomId } = await req.json();
+    if (!mood || !roomId) {
+      return NextResponse.json({ error: "mood and roomId are required" }, { status: 400 });
     }
 
     const dateStr = date ?? new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Tokyo" });
@@ -180,13 +180,12 @@ export async function POST(req: NextRequest) {
 
     const { data: users, error: usersError } = await supabase
       .from("users")
-      .select("role, home_station");
+      .select("nickname, home_station")
+      .eq("room_id", roomId);
     if (usersError) throw usersError;
 
-    const me = users?.find((u) => u.role === "me");
-    const partner = users?.find((u) => u.role === "partner");
-    const stationA = me?.home_station ?? "目黒駅";
-    const stationB = partner?.home_station ?? "東京駅";
+    const stationA = users?.[0]?.home_station ?? "目黒駅";
+    const stationB = users?.[1]?.home_station ?? "東京駅";
 
     const weather = await fetchWeather(dateStr);
     const weatherContext = weather.available
@@ -270,11 +269,12 @@ ${areaReq}
       generated = JSON.parse(text) as PlaceData;
     }
 
-    // 既存の suggested を削除して新規挿入
+    // 既存の suggested を削除して新規挿入（ルームスコープ）
     const { error: deleteError } = await supabase
       .from("places")
       .delete()
-      .eq("status", "suggested");
+      .eq("status", "suggested")
+      .eq("room_id", roomId);
     if (deleteError) throw deleteError;
 
     const records = generated.places.map((p) => ({
@@ -287,6 +287,7 @@ ${areaReq}
       tabelog_url: sanitizeUrl(p.tabelog_url, p.name, p.type),
       comment: p.comment,
       status: "suggested",
+      room_id: roomId,
     }));
 
     const { data: inserted, error: insertError } = await supabase
