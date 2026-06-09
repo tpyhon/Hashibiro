@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "@/lib/supabase";
 
 type Tab = "plan" | "favorite" | "history";
@@ -30,6 +30,12 @@ interface WeatherInfo {
   weatherLabel: string;
   tempLabel: string;
   rain: number;
+}
+
+interface MidpointArea {
+  name: string;
+  description: string;
+  access: string;
 }
 
 const WMO_CODES: Record<number, string> = {
@@ -393,6 +399,10 @@ export default function Home() {
   const [showSettings, setShowSettings] = useState(false);
   const [selectedBudget, setSelectedBudget] = useState<number>(10000);
   const [weatherInfo, setWeatherInfo] = useState<WeatherInfo | null | "loading">("loading");
+  const [midpoints, setMidpoints] = useState<MidpointArea[]>([]);
+  const [isMidpointLoading, setIsMidpointLoading] = useState(false);
+  const [selectedArea, setSelectedArea] = useState<string | null>(null);
+  const lastFetchKey = useRef<string>("");
 
   const loadPlaces = useCallback(async () => {
     const { data } = await supabase
@@ -413,6 +423,27 @@ export default function Home() {
       });
     }
   }, []);
+
+  const fetchMidpoints = useCallback(async () => {
+    setIsMidpointLoading(true);
+    try {
+      const res = await fetch("/api/midpoints", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stationA: stations.me, stationB: stations.partner }),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      const newAreas: MidpointArea[] = data.areas ?? [];
+      setMidpoints(newAreas);
+      // 選択中エリアが新リストにない場合のみリセット
+      setSelectedArea((prev) => (prev && newAreas.some((a) => a.name === prev) ? prev : null));
+    } catch {
+      // silent fail
+    } finally {
+      setIsMidpointLoading(false);
+    }
+  }, [stations.me, stations.partner]);
 
   // 初期ロード
   useEffect(() => {
@@ -453,6 +484,11 @@ export default function Home() {
     setSelectedBudget(selectedTimePeriod === "dinner" ? 10000 : 5000);
   }, [selectedTimePeriod]);
 
+  // 初期ロード完了後 or 駅変更後にエリア候補を取得
+  useEffect(() => {
+    if (!isInitialLoading) fetchMidpoints();
+  }, [fetchMidpoints, isInitialLoading]);
+
   const handleFavorite = async (id: number) => {
     const place = places.find((p) => p.id === id);
     if (!place) return;
@@ -477,6 +513,13 @@ export default function Home() {
     setErrorMsg(null);
     if (!newMood) return;
 
+    // キャッシュヒット：同パラメータの直前フェッチ → APIをスキップ
+    const fetchKey = `${newMood}:${selectedDate}:${selectedTimePeriod}:${selectedBudget}:${selectedArea}`;
+    if (fetchKey === lastFetchKey.current) {
+      setActiveTab("plan");
+      return;
+    }
+
     setIsLoading(true);
     setCurrentArea(null);
 
@@ -484,7 +527,7 @@ export default function Home() {
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mood: newMood, date: selectedDate, timePeriod: selectedTimePeriod, budget: selectedBudget }),
+        body: JSON.stringify({ mood: newMood, date: selectedDate, timePeriod: selectedTimePeriod, budget: selectedBudget, area: selectedArea }),
       });
       if (!res.ok) {
         const err = await res.json();
@@ -492,6 +535,7 @@ export default function Home() {
       }
       const data = await res.json();
       setCurrentArea(data.area);
+      lastFetchKey.current = fetchKey;
       await loadPlaces();
       setActiveTab("plan");
     } catch (err) {
@@ -662,16 +706,63 @@ export default function Home() {
               </div>
             </div>
 
+            {/* 中間エリア選択 */}
+            <div className="bg-white rounded-2xl border border-rose-50 shadow-sm p-4 flex flex-col gap-3">
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-semibold text-gray-700">📍 どのエリアに行く？</p>
+                <button
+                  onClick={fetchMidpoints}
+                  disabled={isMidpointLoading}
+                  className="text-xs text-rose-400 hover:text-rose-600 disabled:opacity-40 transition-colors"
+                >
+                  {isMidpointLoading ? "探し中..." : "↺ 再取得"}
+                </button>
+              </div>
+
+              {isMidpointLoading ? (
+                <div className="flex gap-2 overflow-x-auto pb-1">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="flex-shrink-0 w-[140px] h-[80px] bg-rose-50 rounded-xl animate-pulse" />
+                  ))}
+                </div>
+              ) : midpoints.length > 0 ? (
+                <div className="flex gap-2 overflow-x-auto pb-1 -mx-4 px-4">
+                  {midpoints.map((area) => (
+                    <button
+                      key={area.name}
+                      onClick={() => setSelectedArea(area.name === selectedArea ? null : area.name)}
+                      className={`flex-shrink-0 flex flex-col text-left px-3 py-2.5 rounded-xl border transition-all min-w-[140px] max-w-[170px] ${
+                        selectedArea === area.name
+                          ? "bg-rose-500 text-white border-rose-500 shadow-sm"
+                          : "bg-rose-50/50 text-gray-700 border-rose-100 hover:border-rose-300"
+                      }`}
+                    >
+                      <span className="font-bold text-sm leading-tight">{area.name}</span>
+                      <span className={`text-[10px] mt-1 line-clamp-2 leading-snug ${selectedArea === area.name ? "text-white/80" : "text-gray-500"}`}>
+                        {area.description}
+                      </span>
+                      <span className={`text-[10px] mt-1.5 ${selectedArea === area.name ? "text-white/60" : "text-rose-400"}`}>
+                        🚉 {area.access}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+
             {/* 気分ボタン */}
             <div>
               <p className="text-sm font-semibold text-gray-600 mb-2">気分は？</p>
+              {!selectedArea && midpoints.length > 0 && (
+                <p className="text-xs text-rose-300 mb-2">↑ まずエリアを選んでね！</p>
+              )}
               <div className="flex flex-wrap gap-2">
                 {MOODS.map((mood) => (
                   <button
                     key={mood}
                     onClick={() => handleMoodSelect(mood)}
-                    disabled={isLoading}
-                    className={`text-xs px-3 py-1.5 rounded-full border transition-all disabled:opacity-50 ${
+                    disabled={isLoading || !selectedArea}
+                    className={`text-xs px-3 py-1.5 rounded-full border transition-all disabled:opacity-40 ${
                       selectedMood === mood
                         ? "bg-rose-500 text-white border-rose-500"
                         : "bg-white text-gray-600 border-rose-200 hover:border-rose-400"

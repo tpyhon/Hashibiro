@@ -168,7 +168,7 @@ const TIME_PERIOD_LABELS: Record<string, string> = {
 
 export async function POST(req: NextRequest) {
   try {
-    const { mood, date, timePeriod, budget } = await req.json();
+    const { mood, date, timePeriod, budget, area } = await req.json();
     if (!mood) {
       return NextResponse.json({ error: "mood is required" }, { status: 400 });
     }
@@ -198,6 +198,13 @@ export async function POST(req: NextRequest) {
 
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
 
+    const areaLine = area
+      ? `- デートエリア: ${area}（このエリアのスポットのみ提案すること）`
+      : `- エリア: 両駅の中間で最適なエリアを自分で1つ選定すること`;
+    const areaReq = area
+      ? `1. エリア「${area}」内のレストラン・スポットのみを提案する（エリア外は不可）`
+      : `1. 両駅からアクセスが良い中間エリアを1つ特定する`;
+
     const basePrompt = `
 あなたは東京のデートスポットに詳しいプランナーです。
 以下の条件でカップルのデートプランを提案してください。
@@ -205,6 +212,7 @@ export async function POST(req: NextRequest) {
 【条件】
 - 出発地A: ${stationA}
 - 出発地B: ${stationB}
+${areaLine}
 - デートの日時: ${dateLabel} ${periodLabel}
 - 天気予報: ${weatherContext}
 - 混雑予測: ${crowdLevel}
@@ -212,7 +220,7 @@ export async function POST(req: NextRequest) {
 - 今日の気分: ${mood}
 
 【提案の要件】
-1. 両駅からアクセスが良い中間エリアを1つ特定する
+${areaReq}
 2. そのエリアで気分に合った**チェーン店以外**の飲食店を、異なるカテゴリ（イタリアン・和食・中華・フレンチ・ビストロ等）から各カテゴリ2〜3店舗、合計8〜10店舗提案する
 3. 同エリアのデートスポット（公園・美術館・商業施設等）を2〜3箇所提案する
 4. 飲食店は1人あたり${budgetLabel}以内の予算の店のみを選ぶこと（それ以上の高級店は除外）
@@ -287,7 +295,7 @@ export async function POST(req: NextRequest) {
       .select();
     if (insertError) throw insertError;
 
-    return NextResponse.json({ area: generated.area, places: inserted });
+    return NextResponse.json({ area: area ?? generated.area, places: inserted });
   } catch (err) {
     console.error("generate error:", err);
     return NextResponse.json(
