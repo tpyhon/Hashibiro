@@ -227,6 +227,68 @@ function PlaceCard({
   );
 }
 
+// ─── Status Bar ───────────────────────────────────────────────────────────────
+
+const SEARCH_STEPS = [
+  { icon: "🗺️", text: "中間エリアを特定中..." },
+  { icon: "🍽️", text: "レストランをリサーチ中..." },
+  { icon: "🔍", text: "食べログURLを確認中..." },
+  { icon: "✨", text: "デートプランを整理中..." },
+];
+
+function StatusBar({ isLoading }: { isLoading: boolean }) {
+  const [progress, setProgress] = useState(0);
+  const [stepIdx, setStepIdx] = useState(0);
+
+  useEffect(() => {
+    if (!isLoading) return;
+    setProgress(0);
+    setStepIdx(0);
+
+    const progressTimer = setInterval(() => {
+      setProgress((prev) => {
+        const remaining = 90 - prev;
+        return prev + Math.max(remaining * 0.07, 0.5);
+      });
+    }, 500);
+
+    const stepTimer = setInterval(() => {
+      setStepIdx((prev) => Math.min(prev + 1, SEARCH_STEPS.length - 1));
+    }, 4500);
+
+    return () => {
+      clearInterval(progressTimer);
+      clearInterval(stepTimer);
+    };
+  }, [isLoading]);
+
+  if (!isLoading) return null;
+
+  const step = SEARCH_STEPS[stepIdx];
+
+  return (
+    <div className="sticky top-[57px] z-10 bg-white border-b border-rose-100 shadow-sm">
+      <div className="max-w-md mx-auto px-4 py-2">
+        <div className="flex items-center justify-between text-xs text-gray-500 mb-1.5">
+          <span className="flex items-center gap-1">
+            <span>{step.icon}</span>
+            <span>{step.text}</span>
+          </span>
+          <span className="text-rose-400 font-medium tabular-nums">
+            {Math.min(Math.round(progress), 90)}%
+          </span>
+        </div>
+        <div className="h-1.5 bg-rose-50 rounded-full overflow-hidden">
+          <div
+            className="h-full bg-gradient-to-r from-rose-400 to-pink-400 rounded-full transition-all duration-500 ease-out"
+            style={{ width: `${Math.min(progress, 90)}%` }}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Loading Card ─────────────────────────────────────────────────────────────
 
 function LoadingCard() {
@@ -406,6 +468,8 @@ export default function Home() {
           </div>
         </div>
       </header>
+
+      <StatusBar isLoading={isLoading} />
 
       <div className="max-w-md mx-auto px-4 pt-4 pb-24">
         {/* タブ */}
