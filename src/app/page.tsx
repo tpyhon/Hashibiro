@@ -20,6 +20,11 @@ interface Place {
   created_at: string;
 }
 
+interface UserStation {
+  me: string;
+  partner: string;
+}
+
 const MOODS = [
   "🍝 がっつり食べたい",
   "☕ まったりしたい",
@@ -38,11 +43,14 @@ const categoryColors: Record<string, string> = {
   中華: "bg-yellow-100 text-yellow-700",
   美術館: "bg-indigo-100 text-indigo-700",
   バー: "bg-pink-100 text-pink-700",
+  ビストロ: "bg-teal-100 text-teal-700",
 };
 
 function categoryColor(cat: string) {
   return categoryColors[cat] ?? "bg-gray-100 text-gray-600";
 }
+
+// ─── Toast ───────────────────────────────────────────────────────────────────
 
 function Toast({ message, onClose }: { message: string; onClose: () => void }) {
   useEffect(() => {
@@ -52,12 +60,98 @@ function Toast({ message, onClose }: { message: string; onClose: () => void }) {
 
   return (
     <div className="fixed bottom-6 inset-x-4 z-50 flex justify-center pointer-events-none">
-      <div className="bg-rose-500 text-white text-sm px-5 py-3 rounded-2xl shadow-xl max-w-sm text-center leading-6">
+      <div className="bg-rose-500 text-white text-sm px-5 py-3 rounded-2xl shadow-xl max-w-sm text-center leading-6 whitespace-pre-line">
         {message}
       </div>
     </div>
   );
 }
+
+// ─── Station Settings Modal ───────────────────────────────────────────────────
+
+function SettingsModal({
+  stations,
+  onClose,
+  onSaved,
+}: {
+  stations: UserStation;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [meStation, setMeStation] = useState(stations.me);
+  const [partnerStation, setPartnerStation] = useState(stations.partner);
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async () => {
+    setSaving(true);
+    await Promise.all([
+      supabase.from("users").update({ home_station: meStation }).eq("role", "me"),
+      supabase.from("users").update({ home_station: partnerStation }).eq("role", "partner"),
+    ]);
+    setSaving(false);
+    onSaved();
+    onClose();
+  };
+
+  return (
+    <div
+      className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <div
+        className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h2 className="text-base font-bold text-gray-800 mb-4">🚉 最寄り駅を変更</h2>
+
+        <div className="flex flex-col gap-4">
+          <div>
+            <label className="text-xs font-medium text-gray-600 mb-1 block">
+              あなたの最寄り駅
+            </label>
+            <input
+              type="text"
+              value={meStation}
+              onChange={(e) => setMeStation(e.target.value)}
+              placeholder="例：目黒駅"
+              className="w-full border border-rose-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-rose-300"
+            />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-gray-600 mb-1 block">
+              彼女の最寄り駅
+            </label>
+            <input
+              type="text"
+              value={partnerStation}
+              onChange={(e) => setPartnerStation(e.target.value)}
+              placeholder="例：東京駅"
+              className="w-full border border-rose-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-rose-300"
+            />
+          </div>
+        </div>
+
+        <div className="flex gap-2 mt-5">
+          <button
+            onClick={onClose}
+            className="flex-1 py-2 rounded-xl border border-gray-200 text-sm text-gray-500 hover:bg-gray-50"
+          >
+            キャンセル
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="flex-1 py-2 rounded-xl bg-rose-500 text-white text-sm font-medium hover:bg-rose-600 disabled:opacity-50"
+          >
+            {saving ? "保存中..." : "保存する"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Place Card ───────────────────────────────────────────────────────────────
 
 function PlaceCard({
   place,
@@ -85,7 +179,6 @@ function PlaceCard({
         <button
           onClick={() => onFavorite(place.id)}
           className={`text-xl flex-shrink-0 transition-transform hover:scale-110 ${isFav ? "text-rose-500" : "text-gray-300"}`}
-          title={isFav ? "お気に入り解除" : "お気に入り"}
         >
           {isFav ? "❤️" : "🖤"}
         </button>
@@ -134,6 +227,8 @@ function PlaceCard({
   );
 }
 
+// ─── Loading Card ─────────────────────────────────────────────────────────────
+
 function LoadingCard() {
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-rose-50 p-6 flex flex-col items-center gap-3">
@@ -149,15 +244,19 @@ function LoadingCard() {
   );
 }
 
+// ─── Main Page ────────────────────────────────────────────────────────────────
+
 export default function Home() {
   const [activeTab, setActiveTab] = useState<Tab>("plan");
   const [places, setPlaces] = useState<Place[]>([]);
+  const [stations, setStations] = useState<UserStation>({ me: "目黒駅", partner: "東京駅" });
   const [selectedMood, setSelectedMood] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [currentArea, setCurrentArea] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
 
   const loadPlaces = useCallback(async () => {
     const { data } = await supabase
@@ -167,21 +266,51 @@ export default function Home() {
     setPlaces((data as Place[]) ?? []);
   }, []);
 
+  const loadUsers = useCallback(async () => {
+    const { data } = await supabase.from("users").select("role, home_station");
+    if (data) {
+      const me = data.find((u) => u.role === "me");
+      const partner = data.find((u) => u.role === "partner");
+      setStations({
+        me: me?.home_station ?? "目黒駅",
+        partner: partner?.home_station ?? "東京駅",
+      });
+    }
+  }, []);
+
+  // 初期ロード
   useEffect(() => {
-    loadPlaces().finally(() => setIsInitialLoading(false));
-  }, [loadPlaces]);
+    Promise.all([loadUsers(), loadPlaces()]).finally(() =>
+      setIsInitialLoading(false)
+    );
+  }, [loadUsers, loadPlaces]);
+
+  // リアルタイム同期
+  useEffect(() => {
+    const channel = supabase
+      .channel("realtime-hashibiro")
+      .on("postgres_changes", { event: "*", schema: "public", table: "places" }, () => {
+        loadPlaces();
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "users" }, () => {
+        loadUsers();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [loadPlaces, loadUsers]);
 
   const handleFavorite = async (id: number) => {
     const place = places.find((p) => p.id === id);
     if (!place) return;
     const newStatus: Status = place.status === "favorite" ? "suggested" : "favorite";
-    // 楽観的更新
     setPlaces((prev) => prev.map((p) => (p.id === id ? { ...p, status: newStatus } : p)));
     await supabase.from("places").update({ status: newStatus }).eq("id", id);
   };
 
   const handleVisited = async (id: number) => {
-    // 楽観的更新
     setPlaces((prev) => prev.map((p) => (p.id === id ? { ...p, status: "visited" } : p)));
     await supabase.from("places").update({ status: "visited" }).eq("id", id);
   };
@@ -206,12 +335,10 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mood: newMood }),
       });
-
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.error ?? "APIエラーが発生しました");
       }
-
       const data = await res.json();
       setCurrentArea(data.area);
       await loadPlaces();
@@ -223,10 +350,9 @@ export default function Home() {
     }
   };
 
-  // タブ別データ
   const planPlaces = places.filter((p) => p.status === "suggested" || p.status === "favorite");
   const favoritePlaces = places.filter((p) => p.status === "favorite");
-  const visitedPlaces = places.filter((p) => p.status === "visited"); // DB側でcreated_at降順済み
+  const visitedPlaces = places.filter((p) => p.status === "visited");
 
   const tabs: { key: Tab; label: string; icon: string; count: number }[] = [
     { key: "plan", label: "作戦会議", icon: "🗓️", count: planPlaces.length },
@@ -242,6 +368,13 @@ export default function Home() {
   return (
     <div className="min-h-screen font-sans" style={{ backgroundColor: "#fff8f8" }}>
       {toast && <Toast message={toast} onClose={() => setToast(null)} />}
+      {showSettings && (
+        <SettingsModal
+          stations={stations}
+          onClose={() => setShowSettings(false)}
+          onSaved={loadUsers}
+        />
+      )}
 
       {/* ヘッダー */}
       <header className="bg-white border-b border-rose-100 sticky top-0 z-10 shadow-sm">
@@ -250,13 +383,25 @@ export default function Home() {
             <h1 className="text-xl font-extrabold text-rose-500 tracking-tight">
               Hashibiro 🦤
             </h1>
-            <div className="text-xs text-gray-500 text-right leading-5">
-              <p>🚉 目黒駅 ↔ 東京駅</p>
-              {currentArea ? (
-                <p className="text-rose-400 font-medium">📍 {currentArea}</p>
-              ) : (
-                <p className="text-rose-400 font-medium">中間地点を探索中…</p>
-              )}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowSettings(true)}
+                className="text-xs text-gray-500 text-right leading-5 hover:text-rose-400 transition-colors"
+              >
+                <p>🚉 {stations.me} ↔ {stations.partner}</p>
+                {currentArea ? (
+                  <p className="text-rose-400 font-medium">📍 {currentArea}</p>
+                ) : (
+                  <p className="text-rose-300">タップで駅を変更</p>
+                )}
+              </button>
+              <button
+                onClick={() => setShowSettings(true)}
+                className="text-lg text-gray-400 hover:text-rose-400 transition-colors"
+                title="駅を変更"
+              >
+                ⚙️
+              </button>
             </div>
           </div>
         </div>
@@ -278,11 +423,9 @@ export default function Home() {
               <span>{icon}</span>
               <span>{label}</span>
               {count > 0 && (
-                <span
-                  className={`text-[10px] mt-0.5 px-1.5 rounded-full ${
-                    activeTab === key ? "bg-white/30 text-white" : "bg-rose-100 text-rose-500"
-                  }`}
-                >
+                <span className={`text-[10px] mt-0.5 px-1.5 rounded-full ${
+                  activeTab === key ? "bg-white/30 text-white" : "bg-rose-100 text-rose-500"
+                }`}>
                   {count}件
                 </span>
               )}
@@ -325,9 +468,9 @@ export default function Home() {
 
         {/* 初期ローディング */}
         {isInitialLoading && (
-          <div className="text-center py-16 text-gray-400">
-            <p className="text-3xl animate-spin">🦤</p>
-            <p className="text-sm mt-2">データを読み込み中...</p>
+          <div className="text-center py-16">
+            <p className="text-3xl animate-bounce">🦤</p>
+            <p className="text-sm mt-2 text-gray-400">データを読み込み中...</p>
           </div>
         )}
 
