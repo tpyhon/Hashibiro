@@ -33,11 +33,26 @@ function extractJson(text: string): string {
 function sanitizeUrl(url: string | undefined, name: string, type: string): string {
   if (url) {
     const lower = url.toLowerCase();
-    if (
-      (lower.startsWith("https://tabelog.com/") && !lower.includes("rst_search")) ||
-      lower.startsWith("https://www.google.com/maps")
-    ) {
-      return url;
+    if (type === "restaurant") {
+      if (
+        lower.startsWith("https://tabelog.com/") &&
+        !lower.includes("rst_search") &&
+        !lower.includes("rstlst") &&
+        !lower.includes("/search")
+      ) {
+        try {
+          const parts = new URL(url).pathname.split("/").filter(Boolean);
+          // 食べログ店舗ページは /都道府県/エリア/サブエリア/数字ID/ の4セグメント
+          if (parts.length >= 4 && /^\d+$/.test(parts[3])) return url;
+        } catch { /* fall through */ }
+      }
+    } else {
+      if (
+        lower.startsWith("https://www.google.com/maps") ||
+        (lower.startsWith("https://") && !lower.includes("tabelog.com"))
+      ) {
+        return url;
+      }
     }
   }
   if (type === "restaurant") {
@@ -100,22 +115,30 @@ const WMO_CODES: Record<number, string> = {
 
 const DAY_OF_WEEK = ["日", "月", "火", "水", "木", "金", "土"];
 
-async function fetchWeather(date: string): Promise<string> {
+type WeatherResult = { description: string; available: boolean };
+
+async function fetchWeather(date: string): Promise<WeatherResult> {
   try {
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=35.6762&longitude=139.6503&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum&timezone=Asia%2FTokyo&start_date=${date}&end_date=${date}`;
-    const res = await fetch(url);
-    if (!res.ok) return "天気不明";
+    const res = await fetch(
+      `https://api.open-meteo.com/v1/forecast?latitude=35.6762&longitude=139.6503&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum&timezone=Asia%2FTokyo&start_date=${date}&end_date=${date}`
+    );
+    if (!res.ok) return { description: "天気不明", available: false };
     const json = await res.json();
     const daily = json.daily;
-    if (!daily || !daily.weather_code?.[0]) return "天気不明";
-    const code: number = daily.weather_code[0];
-    const tMax: number = Math.round(daily.temperature_2m_max[0]);
-    const tMin: number = Math.round(daily.temperature_2m_min[0]);
-    const rain: number = Math.round(daily.precipitation_sum[0] * 10) / 10;
-    const weatherDesc = WMO_CODES[code] ?? "天気不明";
-    return `${weatherDesc}（最高${tMax}℃ / 最低${tMin}℃ / 降水量${rain}mm）`;
+    const code = daily?.weather_code?.[0];
+    const tMax = daily?.temperature_2m_max?.[0];
+    const tMin = daily?.temperature_2m_min?.[0];
+    const rain = daily?.precipitation_sum?.[0];
+    if (code == null || tMax == null || tMin == null) {
+      return { description: "予報期間外", available: false };
+    }
+    const weatherDesc = WMO_CODES[code as number] ?? "天気不明";
+    return {
+      description: `${weatherDesc}（最高${Math.round(tMax)}℃ / 最低${Math.round(tMin)}℃ / 降水量${Math.round((rain ?? 0) * 10) / 10}mm）`,
+      available: true,
+    };
   } catch {
-    return "天気不明";
+    return { description: "天気不明", available: false };
   }
 }
 
@@ -145,13 +168,15 @@ const TIME_PERIOD_LABELS: Record<string, string> = {
 
 export async function POST(req: NextRequest) {
   try {
-    const { mood, date, timePeriod } = await req.json();
+    const { mood, date, timePeriod, budget } = await req.json();
     if (!mood) {
       return NextResponse.json({ error: "mood is required" }, { status: 400 });
     }
 
     const dateStr = date ?? new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Tokyo" });
     const period = timePeriod ?? "dinner";
+    const budgetPerPerson: number = budget ?? (period === "dinner" ? 10000 : 5000);
+    const budgetLabel = `¥${budgetPerPerson.toLocaleString("ja-JP")}`;
 
     const { data: users, error: usersError } = await supabase
       .from("users")
@@ -163,7 +188,10 @@ export async function POST(req: NextRequest) {
     const stationA = me?.home_station ?? "目黒駅";
     const stationB = partner?.home_station ?? "東京駅";
 
-    const [weather] = await Promise.all([fetchWeather(dateStr)]);
+    const weather = await fetchWeather(dateStr);
+    const weatherContext = weather.available
+      ? weather.description
+      : "天気予報が取得できませんでした（晴れを想定して提案してください）";
     const crowdLevel = getCrowdLevel(dateStr, period);
     const dateLabel = formatDate(dateStr);
     const periodLabel = TIME_PERIOD_LABELS[period] ?? period;
@@ -178,22 +206,24 @@ export async function POST(req: NextRequest) {
 - 出発地A: ${stationA}
 - 出発地B: ${stationB}
 - デートの日時: ${dateLabel} ${periodLabel}
-- 天気予報: ${weather}
+- 天気予報: ${weatherContext}
 - 混雑予測: ${crowdLevel}
+- 予算（お一人様）: ${budgetLabel}以内
 - 今日の気分: ${mood}
 
 【提案の要件】
 1. 両駅からアクセスが良い中間エリアを1つ特定する
 2. そのエリアで気分に合った**チェーン店以外**の飲食店を、異なるカテゴリ（イタリアン・和食・中華・フレンチ・ビストロ等）から各カテゴリ2〜3店舗、合計8〜10店舗提案する
 3. 同エリアのデートスポット（公園・美術館・商業施設等）を2〜3箇所提案する
-4. 天気・混雑状況を考慮した提案をする（雨天なら屋内中心、混雑しやすい時は予約できる店を優先など）
-5. comment は天気や混雑を踏まえた二人へのテンション高めな日本語コメント
-6. business_hours・payment_methods が不明な場合は「要確認」
+4. 飲食店は1人あたり${budgetLabel}以内の予算の店のみを選ぶこと（それ以上の高級店は除外）
+5. 天気・混雑状況を考慮した提案をする（雨天なら屋内中心、混雑しやすい時は予約できる店を優先など）
+6. comment は天気・予算・混雑を踏まえた二人へのテンション高めな日本語コメント
+7. business_hours・payment_methods が不明な場合は「要確認」
 `;
 
     const groundingPrompt = basePrompt + `
-7. 各レストランは食べログで実際に検索し、実在するタベログページURL（https://tabelog.com/ で始まる）を tabelog_url に入れること
-8. デートスポットの tabelog_url には公式サイトまたはGoogleマップURLを入れること
+8. 各レストランは「[店名] [エリア名] 食べログ」で検索し、その店舗専用ページ（https://tabelog.com/[都道府県]/[エリアコード]/[サブエリアコード]/[数字のみのID]/ 形式）のURLを tabelog_url に入れること。エリア一覧・検索結果ページのURLは不可
+9. デートスポットの tabelog_url には公式サイトまたはGoogleマップURLを入れること
 
 必ず以下のJSONのみで返答すること（マークダウン・説明文不要）:
 {"area":"エリア名","places":[{"name":"店名","type":"restaurant","category":"カテゴリ","budget":"¥3,000〜","business_hours":"時間","payment_methods":"支払い","tabelog_url":"https://tabelog.com/...","comment":"コメント"}]}

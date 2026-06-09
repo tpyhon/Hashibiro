@@ -25,6 +25,27 @@ interface UserStation {
   partner: string;
 }
 
+interface WeatherInfo {
+  available: boolean;
+  weatherLabel: string;
+  tempLabel: string;
+  rain: number;
+}
+
+const WMO_CODES: Record<number, string> = {
+  0: "快晴", 1: "晴れ", 2: "一部曇り", 3: "曇り",
+  45: "霧", 48: "着氷性の霧",
+  51: "小雨（霧雨）", 53: "霧雨", 55: "強い霧雨",
+  61: "小雨", 63: "雨", 65: "大雨",
+  71: "小雪", 73: "雪", 75: "大雪",
+  77: "あられ",
+  80: "にわか雨（弱）", 81: "にわか雨", 82: "にわか雨（強）",
+  85: "にわか雪（弱）", 86: "にわか雪（強）",
+  95: "雷雨", 96: "雷雨（ひょう）", 99: "激しい雷雨（ひょう）",
+};
+
+const BUDGET_OPTIONS = [2000, 3000, 5000, 8000, 10000];
+
 const MOODS = [
   "🍝 がっつり食べたい",
   "☕ まったりしたい",
@@ -42,6 +63,44 @@ type TimePeriod = (typeof TIME_PERIODS)[number]["key"];
 
 function todayString() {
   return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Tokyo" });
+}
+
+function weatherEmoji(info: WeatherInfo): string {
+  if (!info.available) return "🌤️";
+  const w = info.weatherLabel;
+  if (w.includes("雷")) return "⛈️";
+  if (w.includes("雪")) return "❄️";
+  if (w.includes("雨") || w.includes("霧雨") || w.includes("あられ")) return "🌧️";
+  if (w.includes("霧")) return "🌫️";
+  if (w.includes("曇り") && !w.includes("一部")) return "☁️";
+  if (w.includes("一部曇り")) return "🌤️";
+  return "☀️";
+}
+
+async function fetchWeatherForDisplay(date: string): Promise<WeatherInfo | null> {
+  try {
+    const res = await fetch(
+      `https://api.open-meteo.com/v1/forecast?latitude=35.6762&longitude=139.6503&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum&timezone=Asia%2FTokyo&start_date=${date}&end_date=${date}`
+    );
+    if (!res.ok) return null;
+    const json = await res.json();
+    const daily = json.daily;
+    const code = daily?.weather_code?.[0];
+    const tMax = daily?.temperature_2m_max?.[0];
+    const tMin = daily?.temperature_2m_min?.[0];
+    const rain = daily?.precipitation_sum?.[0];
+    if (code == null || tMax == null || tMin == null) {
+      return { available: false, weatherLabel: "", tempLabel: "", rain: 0 };
+    }
+    return {
+      available: true,
+      weatherLabel: WMO_CODES[code as number] ?? "天気不明",
+      tempLabel: `最高${Math.round(tMax)}℃ / 最低${Math.round(tMin)}℃`,
+      rain: Math.round((rain ?? 0) * 10) / 10,
+    };
+  } catch {
+    return null;
+  }
 }
 
 const categoryColors: Record<string, string> = {
@@ -332,6 +391,8 @@ export default function Home() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [selectedBudget, setSelectedBudget] = useState<number>(10000);
+  const [weatherInfo, setWeatherInfo] = useState<WeatherInfo | null | "loading">("loading");
 
   const loadPlaces = useCallback(async () => {
     const { data } = await supabase
@@ -377,6 +438,21 @@ export default function Home() {
     };
   }, [loadPlaces, loadUsers]);
 
+  // 日付変更で天気を取得
+  useEffect(() => {
+    let cancelled = false;
+    setWeatherInfo("loading");
+    fetchWeatherForDisplay(selectedDate).then((info) => {
+      if (!cancelled) setWeatherInfo(info);
+    });
+    return () => { cancelled = true; };
+  }, [selectedDate]);
+
+  // 時間帯変更でデフォルト予算を更新
+  useEffect(() => {
+    setSelectedBudget(selectedTimePeriod === "dinner" ? 10000 : 5000);
+  }, [selectedTimePeriod]);
+
   const handleFavorite = async (id: number) => {
     const place = places.find((p) => p.id === id);
     if (!place) return;
@@ -408,7 +484,7 @@ export default function Home() {
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mood: newMood, date: selectedDate, timePeriod: selectedTimePeriod }),
+        body: JSON.stringify({ mood: newMood, date: selectedDate, timePeriod: selectedTimePeriod, budget: selectedBudget }),
       });
       if (!res.ok) {
         const err = await res.json();
@@ -485,6 +561,30 @@ export default function Home() {
       <StatusBar isLoading={isLoading} />
 
       <div className="max-w-md mx-auto px-4 pt-4 pb-24">
+        {/* 天気カード */}
+        {weatherInfo === "loading" ? (
+          <div className="h-16 bg-sky-50 rounded-2xl animate-pulse border border-sky-100 mb-4" />
+        ) : weatherInfo ? (
+          <div className={`rounded-2xl border p-3 mb-4 flex items-center gap-3 ${
+            weatherInfo.available
+              ? "bg-gradient-to-r from-sky-50 to-blue-50 border-sky-100"
+              : "bg-amber-50 border-amber-100"
+          }`}>
+            <span className="text-3xl">{weatherEmoji(weatherInfo)}</span>
+            <div className="flex-1 min-w-0">
+              <p className="text-[11px] font-semibold text-gray-400">{selectedDate} の東京の天気</p>
+              {weatherInfo.available ? (
+                <>
+                  <p className="text-sm font-bold text-gray-800">{weatherInfo.weatherLabel}</p>
+                  <p className="text-xs text-gray-500">{weatherInfo.tempLabel} · 降水量 {weatherInfo.rain}mm</p>
+                </>
+              ) : (
+                <p className="text-sm font-medium text-amber-700">予報期間外 — 晴れ想定で提案します ☀️</p>
+              )}
+            </div>
+          </div>
+        ) : null}
+
         {/* タブ */}
         <div className="flex gap-1 bg-white rounded-2xl p-1 shadow-sm border border-rose-50 mb-5">
           {tabs.map(({ key, label, icon, count }) => (
@@ -539,6 +639,26 @@ export default function Home() {
                     <span className={`text-[10px] mt-0.5 ${selectedTimePeriod === key ? "text-white/70" : "text-gray-400"}`}>{desc}</span>
                   </button>
                 ))}
+              </div>
+
+              {/* 予算 */}
+              <div>
+                <p className="text-xs font-semibold text-gray-600 mb-1.5">💰 予算（お一人様）</p>
+                <div className="flex gap-1.5 flex-wrap">
+                  {BUDGET_OPTIONS.map((v) => (
+                    <button
+                      key={v}
+                      onClick={() => setSelectedBudget(v)}
+                      className={`px-2.5 py-1 rounded-full text-xs border transition-all ${
+                        selectedBudget === v
+                          ? "bg-rose-500 text-white border-rose-500"
+                          : "bg-white text-gray-600 border-rose-200 hover:border-rose-400"
+                      }`}
+                    >
+                      ¥{v.toLocaleString()}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
 
