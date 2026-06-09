@@ -86,12 +86,72 @@ type PlaceData = {
   }>;
 };
 
+const WMO_CODES: Record<number, string> = {
+  0: "快晴", 1: "晴れ", 2: "一部曇り", 3: "曇り",
+  45: "霧", 48: "着氷性の霧",
+  51: "小雨（霧雨）", 53: "霧雨", 55: "強い霧雨",
+  61: "小雨", 63: "雨", 65: "大雨",
+  71: "小雪", 73: "雪", 75: "大雪",
+  77: "あられ",
+  80: "にわか雨（弱）", 81: "にわか雨", 82: "にわか雨（強）",
+  85: "にわか雪（弱）", 86: "にわか雪（強）",
+  95: "雷雨", 96: "雷雨（ひょう）", 99: "激しい雷雨（ひょう）",
+};
+
+const DAY_OF_WEEK = ["日", "月", "火", "水", "木", "金", "土"];
+
+async function fetchWeather(date: string): Promise<string> {
+  try {
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=35.6762&longitude=139.6503&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum&timezone=Asia%2FTokyo&start_date=${date}&end_date=${date}`;
+    const res = await fetch(url);
+    if (!res.ok) return "天気不明";
+    const json = await res.json();
+    const daily = json.daily;
+    if (!daily || !daily.weather_code?.[0]) return "天気不明";
+    const code: number = daily.weather_code[0];
+    const tMax: number = Math.round(daily.temperature_2m_max[0]);
+    const tMin: number = Math.round(daily.temperature_2m_min[0]);
+    const rain: number = Math.round(daily.precipitation_sum[0] * 10) / 10;
+    const weatherDesc = WMO_CODES[code] ?? "天気不明";
+    return `${weatherDesc}（最高${tMax}℃ / 最低${tMin}℃ / 降水量${rain}mm）`;
+  } catch {
+    return "天気不明";
+  }
+}
+
+function getCrowdLevel(date: string, timePeriod: string): string {
+  const d = new Date(date + "T12:00:00+09:00");
+  const dow = d.getDay();
+  const isWeekend = dow === 0 || dow === 6;
+  if (isWeekend && timePeriod === "lunch") return "非常に混雑しやすい（週末ランチ）";
+  if (isWeekend && timePeriod === "afternoon") return "混雑しやすい（週末午後）";
+  if (isWeekend && timePeriod === "dinner") return "混雑しやすい（週末ディナー）";
+  if (!isWeekend && timePeriod === "lunch") return "やや混雑（平日ランチ）";
+  if (!isWeekend && timePeriod === "afternoon") return "比較的空いている（平日午後）";
+  return "やや混雑（平日ディナー）";
+}
+
+function formatDate(date: string): string {
+  const d = new Date(date + "T12:00:00+09:00");
+  const dow = DAY_OF_WEEK[d.getDay()];
+  return `${date}（${dow}曜日）`;
+}
+
+const TIME_PERIOD_LABELS: Record<string, string> = {
+  lunch: "ランチ（11:00〜14:00）",
+  afternoon: "午後のデート（14:00〜18:00）",
+  dinner: "ディナー（18:00〜22:00）",
+};
+
 export async function POST(req: NextRequest) {
   try {
-    const { mood } = await req.json();
+    const { mood, date, timePeriod } = await req.json();
     if (!mood) {
       return NextResponse.json({ error: "mood is required" }, { status: 400 });
     }
+
+    const dateStr = date ?? new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Tokyo" });
+    const period = timePeriod ?? "dinner";
 
     const { data: users, error: usersError } = await supabase
       .from("users")
@@ -103,6 +163,11 @@ export async function POST(req: NextRequest) {
     const stationA = me?.home_station ?? "目黒駅";
     const stationB = partner?.home_station ?? "東京駅";
 
+    const [weather] = await Promise.all([fetchWeather(dateStr)]);
+    const crowdLevel = getCrowdLevel(dateStr, period);
+    const dateLabel = formatDate(dateStr);
+    const periodLabel = TIME_PERIOD_LABELS[period] ?? period;
+
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
 
     const basePrompt = `
@@ -112,19 +177,23 @@ export async function POST(req: NextRequest) {
 【条件】
 - 出発地A: ${stationA}
 - 出発地B: ${stationB}
+- デートの日時: ${dateLabel} ${periodLabel}
+- 天気予報: ${weather}
+- 混雑予測: ${crowdLevel}
 - 今日の気分: ${mood}
 
 【提案の要件】
 1. 両駅からアクセスが良い中間エリアを1つ特定する
 2. そのエリアで気分に合った**チェーン店以外**の飲食店を、異なるカテゴリ（イタリアン・和食・中華・フレンチ・ビストロ等）から各カテゴリ2〜3店舗、合計8〜10店舗提案する
 3. 同エリアのデートスポット（公園・美術館・商業施設等）を2〜3箇所提案する
-4. comment は二人へのテンション高めな日本語コメント
-5. business_hours・payment_methods が不明な場合は「要確認」
+4. 天気・混雑状況を考慮した提案をする（雨天なら屋内中心、混雑しやすい時は予約できる店を優先など）
+5. comment は天気や混雑を踏まえた二人へのテンション高めな日本語コメント
+6. business_hours・payment_methods が不明な場合は「要確認」
 `;
 
     const groundingPrompt = basePrompt + `
-6. 各レストランは食べログで実際に検索し、実在するタベログページURL（https://tabelog.com/ で始まる）を tabelog_url に入れること
-7. デートスポットの tabelog_url には公式サイトまたはGoogleマップURLを入れること
+7. 各レストランは食べログで実際に検索し、実在するタベログページURL（https://tabelog.com/ で始まる）を tabelog_url に入れること
+8. デートスポットの tabelog_url には公式サイトまたはGoogleマップURLを入れること
 
 必ず以下のJSONのみで返答すること（マークダウン・説明文不要）:
 {"area":"エリア名","places":[{"name":"店名","type":"restaurant","category":"カテゴリ","budget":"¥3,000〜","business_hours":"時間","payment_methods":"支払い","tabelog_url":"https://tabelog.com/...","comment":"コメント"}]}

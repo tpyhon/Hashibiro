@@ -33,6 +33,17 @@ const MOODS = [
   "🍣 和食気分",
 ];
 
+const TIME_PERIODS = [
+  { key: "lunch", label: "🌞 ランチ", desc: "11:00〜14:00" },
+  { key: "afternoon", label: "🌆 午後", desc: "14:00〜18:00" },
+  { key: "dinner", label: "🌙 ディナー", desc: "18:00〜22:00" },
+] as const;
+type TimePeriod = (typeof TIME_PERIODS)[number]["key"];
+
+function todayString() {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Tokyo" });
+}
+
 const categoryColors: Record<string, string> = {
   イタリアン: "bg-orange-100 text-orange-700",
   "カフェ・本屋": "bg-amber-100 text-amber-700",
@@ -313,6 +324,8 @@ export default function Home() {
   const [places, setPlaces] = useState<Place[]>([]);
   const [stations, setStations] = useState<UserStation>({ me: "目黒駅", partner: "東京駅" });
   const [selectedMood, setSelectedMood] = useState<string | null>(null);
+  const [selectedDate, setSelectedDate] = useState<string>(todayString());
+  const [selectedTimePeriod, setSelectedTimePeriod] = useState<TimePeriod>("dinner");
   const [isLoading, setIsLoading] = useState(false);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [currentArea, setCurrentArea] = useState<string | null>(null);
@@ -395,7 +408,7 @@ export default function Home() {
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mood: newMood }),
+        body: JSON.stringify({ mood: newMood, date: selectedDate, timePeriod: selectedTimePeriod }),
       });
       if (!res.ok) {
         const err = await res.json();
@@ -497,27 +510,59 @@ export default function Home() {
           ))}
         </div>
 
-        {/* 作戦会議: 気分ボタン */}
+        {/* 作戦会議: 日時 + 気分 */}
         {activeTab === "plan" && (
-          <div className="mb-5">
-            <p className="text-sm font-semibold text-gray-600 mb-2">今日の気分は？</p>
-            <div className="flex flex-wrap gap-2">
-              {MOODS.map((mood) => (
-                <button
-                  key={mood}
-                  onClick={() => handleMoodSelect(mood)}
-                  disabled={isLoading}
-                  className={`text-xs px-3 py-1.5 rounded-full border transition-all disabled:opacity-50 ${
-                    selectedMood === mood
-                      ? "bg-rose-500 text-white border-rose-500"
-                      : "bg-white text-gray-600 border-rose-200 hover:border-rose-400"
-                  }`}
-                >
-                  {mood}
-                </button>
-              ))}
+          <div className="mb-5 flex flex-col gap-4">
+
+            {/* 日付・時間帯 */}
+            <div className="bg-white rounded-2xl border border-rose-50 shadow-sm p-4 flex flex-col gap-3">
+              <p className="text-sm font-semibold text-gray-700">📅 いつ行く？</p>
+              <input
+                type="date"
+                value={selectedDate}
+                min={todayString()}
+                onChange={(e) => setSelectedDate(e.target.value)}
+                className="w-full border border-rose-200 rounded-xl px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-rose-300"
+              />
+              <div className="flex gap-2">
+                {TIME_PERIODS.map(({ key, label, desc }) => (
+                  <button
+                    key={key}
+                    onClick={() => setSelectedTimePeriod(key)}
+                    className={`flex-1 flex flex-col items-center py-2 rounded-xl border text-xs transition-all ${
+                      selectedTimePeriod === key
+                        ? "bg-rose-500 text-white border-rose-500"
+                        : "bg-white text-gray-600 border-rose-200 hover:border-rose-400"
+                    }`}
+                  >
+                    <span>{label}</span>
+                    <span className={`text-[10px] mt-0.5 ${selectedTimePeriod === key ? "text-white/70" : "text-gray-400"}`}>{desc}</span>
+                  </button>
+                ))}
+              </div>
             </div>
-            {errorMsg && <p className="text-xs text-red-500 mt-2">⚠️ {errorMsg}</p>}
+
+            {/* 気分ボタン */}
+            <div>
+              <p className="text-sm font-semibold text-gray-600 mb-2">気分は？</p>
+              <div className="flex flex-wrap gap-2">
+                {MOODS.map((mood) => (
+                  <button
+                    key={mood}
+                    onClick={() => handleMoodSelect(mood)}
+                    disabled={isLoading}
+                    className={`text-xs px-3 py-1.5 rounded-full border transition-all disabled:opacity-50 ${
+                      selectedMood === mood
+                        ? "bg-rose-500 text-white border-rose-500"
+                        : "bg-white text-gray-600 border-rose-200 hover:border-rose-400"
+                    }`}
+                  >
+                    {mood}
+                  </button>
+                ))}
+              </div>
+              {errorMsg && <p className="text-xs text-red-500 mt-2">⚠️ {errorMsg}</p>}
+            </div>
           </div>
         )}
 
